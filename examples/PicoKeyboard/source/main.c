@@ -36,10 +36,10 @@ int main(void) {
     consoleInit(0, 3, 0, NULL, 0, 15);
     
     // UI-Text (Linksbündig, 4 Zeilen Platz - internationale Sprache)
-    iprintf("\x1b[1;1HPicoKeyboard Toolset");
+    iprintf("\x1b[1;1HPicoKeyboard v2.0.0");
     iprintf("\x1b[2;1HStatus: USB Active");
-    iprintf("\x1b[3;1HPress NDS Keys to type");
-    iprintf("\x1b[4;1HMode: Keyboard Output");
+    iprintf("\x1b[3;1HMode: Keyboard Output");
+    iprintf("\x1b[4;1HAverage Pace: N/A");
 
     // TinyUSB initialisieren (Nutzt den DSpico Hardware-Layer)
     tusb_init();
@@ -57,7 +57,7 @@ int main(void) {
             uint8_t keycode[6] = {0};
             bool send_report = false;
 
-            // Simples Mapping der NDS-Tasten auf USB-Keycodes
+            // Erweitertes Mapping der NDS-Tasten auf USB-Keycodes
             if (keys_down & KEY_A) {
                 keycode[0] = HID_KEY_A;
                 send_report = true;
@@ -76,10 +76,29 @@ int main(void) {
             } else if (keys_down & KEY_SELECT) {
                 keycode[0] = HID_KEY_SPACE;
                 send_report = true;
+            } else if (keys_down & KEY_UP) {
+                keycode[0] = HID_KEY_ARROW_UP;
+                send_report = true;
+            } else if (keys_down & KEY_DOWN) {
+                keycode[0] = HID_KEY_ARROW_DOWN;
+                send_report = true;
+            } else if (keys_down & KEY_LEFT) {
+                keycode[0] = HID_KEY_ARROW_LEFT;
+                send_report = true;
+            } else if (keys_down & KEY_RIGHT) {
+                keycode[0] = HID_KEY_ARROW_RIGHT;
+                send_report = true;
+            } else if (keys_down & KEY_L) {
+                keycode[0] = HID_KEY_BACKSPACE;
+                send_report = true;
+            } else if (keys_down & KEY_R) {
+                keycode[0] = HID_KEY_ESCAPE;
+                send_report = true;
             }
 
             // Leeren Report senden, wenn Tasten losgelassen werden (Key-Up)
-            if (keys_up & (KEY_A | KEY_B | KEY_X | KEY_Y | KEY_START | KEY_SELECT)) {
+            if (keys_up & (KEY_A | KEY_B | KEY_X | KEY_Y | KEY_START | KEY_SELECT | 
+                           KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT | KEY_L | KEY_R)) {
                 send_report = true;
                 // Das Array 'keycode' bleibt {0}, was dem Mac signalisiert, dass keine Taste mehr gedrückt wird.
             }
