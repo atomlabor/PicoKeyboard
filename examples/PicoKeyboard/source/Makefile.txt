@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------
+# PicoKeyboard Makefile - Version 2.0.0
+# ---------------------------------------------------------------------
+
+TARGET      := PicoKeyboard_v2.0.0
+BUILD       := build
+SOURCES     := source
+INCLUDES    := include
+
+# BlocksDS spezifische Pfade
+BLOCKSDS    ?= /opt/blocksds/core
+TINYUSB     ?= $(BLOCKSDS)/libs/tinyusb
+
+ARCH        := -marm -mcpu=arm946e-s -mthumb-interwork
+CFLAGS      := -g -Wall -O2 \
+               -ffunction-sections \
+               -fdata-sections \
+               $(ARCH)
+
+CFLAGS      += -I$(INCLUDES) -I$(TINYUSB)/src
+
+CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions
+
+LDFLAGS     := -specs=ds_arm9.specs -g $(ARCH) -Wl,-Map,$(TARGET).map \
+               -Wl,--gc-sections
+
+# Verlinken von TinyUSB, der DSpico Hardware-Ebene und der Standard NDS Lib
+LIBS        := -ltinyusb -ldspico -lnds9
+
+# C-Dateien finden
+CFILES      := $(wildcard $(SOURCES)/*.c)
+OFILES      := $(CFILES:$(SOURCES)/%.c=$(BUILD)/%.o)
+
+.PHONY: all clean
+
+all: $(TARGET).nds
+
+$(TARGET).nds: $(TARGET).elf
+	ndstool -c $@ -9 $<
+
+$(TARGET).elf: $(OFILES)
+	$(CC) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
+
+$(BUILD)/%.o: $(SOURCES)/%.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD) $(TARGET).elf $(TARGET).nds $(TARGET).map
