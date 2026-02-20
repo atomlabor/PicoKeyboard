@@ -1,49 +1,61 @@
-# ---------------------------------------------------------------------
-# PicoKeyboard Makefile - Version 2.0.0
-# ---------------------------------------------------------------------
+#---------------------------------------------------------------------------------
+.SUFFIXES:
+#---------------------------------------------------------------------------------
+ifeq ($(strip $(DEVKITARM)),)
+$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
+endif
 
-TARGET      := PicoKeyboard_v2.0.0
-BUILD       := build
-SOURCES     := source
-INCLUDES    := include
+export TARGET	:=	$(shell basename $(CURDIR))
+export TOPDIR	:=	$(CURDIR)
 
-# BlocksDS spezifische Pfade
-BLOCKSDS    ?= /opt/blocksds/core
-TINYUSB     ?= $(BLOCKSDS)/libs/tinyusb
+# specify a directory which contains the nitro filesystem
+# this is relative to the Makefile
+NITRO_FILES	:=
 
-ARCH        := -marm -mcpu=arm946e-s -mthumb-interwork
-CFLAGS      := -g -Wall -O2 \
-               -ffunction-sections \
-               -fdata-sections \
-               $(ARCH)
+# These set the information text in the nds file
+GAME_TITLE     := Picokeyboard
+GAME_SUBTITLE1 := DSpico
+GAME_SUBTITLE2 := atomlabor
+GAME_ICON	   := icon.bmp
 
-CFLAGS      += -I$(INCLUDES) -I$(TINYUSB)/src
+include $(DEVKITARM)/ds_rules
 
-CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions
+.PHONY: checklibtwl checkarm7 checkarm9 clean
 
-LDFLAGS     := -specs=ds_arm9.specs -g $(ARCH) -Wl,-Map,$(TARGET).map \
-               -Wl,--gc-sections
+#---------------------------------------------------------------------------------
+# main targets
+#---------------------------------------------------------------------------------
+all: checklibtwl checkarm7 checkarm9 $(TARGET).nds
 
-# Verlinken von TinyUSB, der DSpico Hardware-Ebene und der Standard NDS Lib
-LIBS        := -ltinyusb -ldspico -lnds9
+#---------------------------------------------------------------------------------
+checklibtwl:
+	$(MAKE) -C ../../libs/libtwl/libtwl7
+	$(MAKE) -C ../../libs/libtwl/libtwl9
 
-# C-Dateien finden
-CFILES      := $(wildcard $(SOURCES)/*.c)
-OFILES      := $(CFILES:$(SOURCES)/%.c=$(BUILD)/%.o)
+#---------------------------------------------------------------------------------
+checkarm7: checklibtwl
+	$(MAKE) -C arm7
 
-.PHONY: all clean
+#---------------------------------------------------------------------------------
+checkarm9: checklibtwl
+	$(MAKE) -C arm9
 
-all: $(TARGET).nds
+#---------------------------------------------------------------------------------
+$(TARGET).nds	: $(NITRO_FILES) arm7/$(TARGET).elf arm9/$(TARGET).elf
+	ndstool	-c $(TARGET).nds -7 arm7/$(TARGET).elf -9 arm9/$(TARGET).elf \
+	-b $(GAME_ICON) "$(GAME_TITLE);$(GAME_SUBTITLE1);$(GAME_SUBTITLE2)" \
+	$(_ADDFILES)
 
-$(TARGET).nds: $(TARGET).elf
-	ndstool -c $@ -9 $<
+#---------------------------------------------------------------------------------
+arm7/$(TARGET).elf:
+	$(MAKE) -C arm7
 
-$(TARGET).elf: $(OFILES)
-	$(CC) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
+#---------------------------------------------------------------------------------
+arm9/$(TARGET).elf:
+	$(MAKE) -C arm9
 
-$(BUILD)/%.o: $(SOURCES)/%.c
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-
+#---------------------------------------------------------------------------------
 clean:
-	rm -rf $(BUILD) $(TARGET).elf $(TARGET).nds $(TARGET).map
+	$(MAKE) -C arm9 clean
+	$(MAKE) -C arm7 clean
+	rm -f $(TARGET).nds $(TARGET).arm7 $(TARGET).arm9
