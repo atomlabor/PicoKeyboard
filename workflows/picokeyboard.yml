@@ -1,0 +1,29 @@
+name: Build PicoKeyboard v2.0.0
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: skylyrac/blocksds:latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build PicoKeyboard
+        run: |
+          cd examples/PicoKeyboard
+          make
+
+      - name: Upload NDS File
+        uses: actions/upload-artifact@v4
+        with:
+          name: PicoKeyboard_v2.0.0_App
+          path: examples/PicoKeyboard/*.nds
