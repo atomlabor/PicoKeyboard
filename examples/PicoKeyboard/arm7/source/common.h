@@ -1,6 +1,5 @@
-#ifndef COMMON_H
-#define COMMON_H
-
+#pragma once
 #include <nds.h>
+#include <libtwl/rtos/rtosMutex.h>
 
-#endif
+extern rtos_mutex_t gCardMutex;
