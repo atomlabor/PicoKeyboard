@@ -128,3 +128,37 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 
     return _desc_str;
 }
+//--------------------------------------------------------------------
+// HID Callbacks (required by TinyUSB linker)
+//--------------------------------------------------------------------
+
+// Wird aufgerufen wenn Host GET_REPORT schickt
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
+                                hid_report_type_t report_type,
+                                uint8_t* buffer, uint16_t reqlen)
+{
+    (void) instance;
+    (void) report_id;
+    (void) report_type;
+    (void) buffer;
+    (void) reqlen;
+    return 0;
+}
+
+// Wird aufgerufen wenn Host SET_REPORT schickt (z.B. CapsLock-LED)
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                            hid_report_type_t report_type,
+                            uint8_t const* buffer, uint16_t bufsize)
+{
+    (void) instance;
+    (void) report_id;
+    (void) report_type;
+    (void) bufsize;
+
+    // Optional: macOS setzt hier die Keyboard-LEDs
+    // Bit 0 = NumLock, Bit 1 = CapsLock, Bit 2 = ScrollLock
+    if (report_type == HID_REPORT_TYPE_OUTPUT && bufsize >= 1) {
+        // uint8_t leds = buffer[0];
+        // -> hier könntest du z.B. eine LED auf dem DS ansteuern
+    }
+}
