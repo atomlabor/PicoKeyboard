@@ -1,9 +1,8 @@
 #include <nds.h>
 #include <stdio.h>
-#include <string.h>
 #include "hid_keycodes.h"
 
-#define FIFO_KEYBOARD  FIFO_USER_01
+#define FIFO_KEYBOARD FIFO_USER_01
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode)
 {
@@ -28,12 +27,8 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier)
 
 int main(void)
 {
-    // ARM9 Initialisierung
-    consoleDemoInit();
-    fifoInit();
-
+    // keyboardDemoInit() erledigt alles: Video, Console, FIFO, Keyboard
     keyboardDemoInit();
-    consoleClear();
 
     iprintf("\x1b[1;1HPicoKeyboard v2.0.0");
     iprintf("\x1b[2;1HStatus: USB Active");
@@ -79,12 +74,10 @@ int main(void)
             touch_key_active = false;
         }
 
-        if (send_key) {
+        if (send_key)
             fifoSendValue32(FIFO_KEYBOARD, make_hid_message(modifier, keycode));
-        }
-        if (send_release) {
+        if (send_release)
             fifoSendValue32(FIFO_KEYBOARD, make_hid_message(0, 0));
-        }
 
         swiWaitForVBlank();
     }
