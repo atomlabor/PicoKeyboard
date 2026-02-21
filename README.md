@@ -1,4 +1,4 @@
-# DSpico USB Keyboard testr
+# DSpico USB Keyboard test
 This repository contains examples of using the DSpico USB port from a DS application.
 
 The `platform` folder contains the tiny usb platform code for the DSpico.
