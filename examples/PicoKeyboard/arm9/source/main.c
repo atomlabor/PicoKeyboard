@@ -27,12 +27,38 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier)
 
 int main(void)
 {
-    // keyboardDemoInit() erledigt alles: Video, Console, FIFO, Keyboard
-    keyboardDemoInit();
+    // Video-Setup: Oberes Display = Statusanzeige, Unteres Display = Tastatur
+    powerOn(POWER_ALL_2D);
 
-    iprintf("\x1b[1;1HPicoKeyboard v2.0.0");
-    iprintf("\x1b[2;1HStatus: USB Active");
-    iprintf("\x1b[3;1HMode: Touchscreen + Keys");
+    // Oberes Display: Textmodus für Statusanzeige
+    videoSetMode(MODE_0_2D);
+    vramSetBankA(VRAM_A_MAIN_BG);
+    PrintConsole *topScreen = consoleDemoInit();
+
+    // Unteres Display: Tastatur
+    videoSetModeSub(MODE_0_2D);
+    vramSetBankC(VRAM_C_SUB_BG);
+
+    // FIFO initialisieren (vor keyboardInit!)
+    fifoInit();
+
+    // Touchscreen-Tastatur auf dem unteren Display
+    keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
+    keyboardShow();
+
+    // Status auf dem oberen Display
+    consoleSelect(topScreen);
+    consoleClear();
+    iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
+    iprintf("\x1b[2;1H  Status: USB Active");
+    iprintf("\x1b[4;1H  Buttons:");
+    iprintf("\x1b[5;1H  A/B = a/b");
+    iprintf("\x1b[6;1H  START = Enter");
+    iprintf("\x1b[7;1H  SELECT = Space");
+    iprintf("\x1b[8;1H  UP/DOWN/LEFT/RIGHT");
+    iprintf("\x1b[9;1H  L = Backspace");
+    iprintf("\x1b[10;1H  R = Escape");
+    iprintf("\x1b[12;1H  Touchscreen: aktiv");
 
     bool touch_key_active = false;
 
@@ -45,9 +71,10 @@ int main(void)
 
         uint8_t keycode  = 0;
         uint8_t modifier = 0;
-        bool send_key     = false;
+        bool send_key    = false;
         bool send_release = false;
 
+        // Touchscreen-Eingabe hat Priorität
         if (touch_char > 0) {
             keycode = ascii_to_hid(touch_char, &modifier);
             if (keycode > 0) {
@@ -55,6 +82,7 @@ int main(void)
                 touch_key_active = true;
             }
         }
+        // Hardware-Buttons
         else if (keys_down & KEY_A)      { keycode = HID_KEY_A;           send_key = true; }
         else if (keys_down & KEY_B)      { keycode = HID_KEY_B;           send_key = true; }
         else if (keys_down & KEY_START)  { keycode = HID_KEY_ENTER;       send_key = true; }
@@ -66,6 +94,7 @@ int main(void)
         else if (keys_down & KEY_L)      { keycode = HID_KEY_BACKSPACE;   send_key = true; }
         else if (keys_down & KEY_R)      { keycode = HID_KEY_ESCAPE;      send_key = true; }
 
+        // Taste loslassen
         if (keys_up & (KEY_A | KEY_B | KEY_START | KEY_SELECT |
                        KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT | KEY_L | KEY_R)) {
             send_release = true;
