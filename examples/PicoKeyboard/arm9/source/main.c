@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "hid_keycodes.h"
-// IPC-Kanal für Keyboard-Reports
+
 #define FIFO_KEYBOARD  FIFO_USER_01
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode)
@@ -13,26 +13,25 @@ static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode)
 static uint8_t ascii_to_hid(int c, uint8_t *modifier)
 {
     *modifier = 0;
-
     if (c >= 'a' && c <= 'z') return HID_KEY_A + (c - 'a');
-
     if (c >= 'A' && c <= 'Z') {
         *modifier = KEYBOARD_MODIFIER_LEFTSHIFT;
         return HID_KEY_A + (c - 'A');
     }
-
     if (c >= '1' && c <= '9') return HID_KEY_1 + (c - '1');
-    if (c == '0') return HID_KEY_0;
-
+    if (c == '0')               return HID_KEY_0;
     if (c == ' ')               return HID_KEY_SPACE;
     if (c == '\n' || c == '\r') return HID_KEY_ENTER;
     if (c == 8)                 return HID_KEY_BACKSPACE;
-
     return 0;
 }
 
 int main(void)
 {
+    // ARM9 Initialisierung
+    consoleDemoInit();
+    fifoInit();
+
     keyboardDemoInit();
     consoleClear();
 
@@ -47,7 +46,6 @@ int main(void)
         scanKeys();
         u32 keys_down = keysDown();
         u32 keys_up   = keysUp();
-
         int touch_char = keyboardUpdate();
 
         uint8_t keycode  = 0;
