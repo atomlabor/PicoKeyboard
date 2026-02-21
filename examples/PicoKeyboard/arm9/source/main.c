@@ -1,7 +1,7 @@
 #include <nds.h>
 #include <stdio.h>
 #include <string.h>
-
+#include "hid_keycodes.h"
 // IPC-Kanal für Keyboard-Reports
 #define FIFO_KEYBOARD  FIFO_USER_01
 
