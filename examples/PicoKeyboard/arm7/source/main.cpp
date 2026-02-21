@@ -5,9 +5,8 @@
 
 rtos_mutex_t gCardMutex;
 
-#define FIFO_KEYBOARD  FIFO_USER_01
+#define FIFO_KEYBOARD FIFO_USER_01
 
-// HID report: [modifier, reserved, key0..key5]
 static uint8_t sHidReport[8] = {0};
 
 static void keyboard_fifo_handler(u32 value, void* userdata)
@@ -25,7 +24,6 @@ static void keyboard_fifo_handler(u32 value, void* userdata)
     sHidReport[6] = 0;
     sHidReport[7] = 0;
 
-    // Sende HID Report wenn USB bereit
     if (tud_hid_ready())
     {
         tud_hid_report(0, sHidReport, sizeof(sHidReport));
@@ -34,25 +32,21 @@ static void keyboard_fifo_handler(u32 value, void* userdata)
 
 int main()
 {
-    // Standard ARM7 Initialisierung
+    // Standard libnds ARM7 Init - Reihenfolge ist wichtig!
     irqInit();
     fifoInit();
     installSoundFIFO();
     installSystemFIFO();
-
     irqEnable(IRQ_VBLANK);
 
-    // Card Mutex initialisieren
+    // Card Mutex für TinyUSB/DSPico
     rtos_createMutex(&gCardMutex);
 
-    // FIFO Handler für Keyboard-Reports vom ARM9
-    fifoSetValue32Handler(FIFO_KEYBOARD, keyboard_fifo_handler, nullptr);
+    // FIFO Handler für Keyboard vom ARM9
+    fifoSetValue32Handler(FIFO_KEYBOARD, keyboard_fifo_handler, NULL);
 
-    // TinyUSB initialisieren
+    // TinyUSB - NACH irqInit() initialisieren
     tud_init(BOARD_TUD_RHPORT);
-
-    // IRQs aktivieren
-    rtos_enableIrqs();
 
     while (true)
     {
