@@ -49,15 +49,6 @@ uint8_t const* tud_hid_descriptor_report_cb(uint8_t instance)
     return desc_hid_report;
 }
 
-//--------------------------------------------------------------------+
-// Interface Numbers
-//--------------------------------------------------------------------+
-
-enum
-{
-    ITF_NUM_HID = 0,
-    ITF_NUM_TOTAL
-};
 
 //--------------------------------------------------------------------+
 // Configuration Descriptor
