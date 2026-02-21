@@ -63,7 +63,7 @@ extern "C" {
 //--------------------------------------------------------------------
 // HID CLASS DRIVER CONFIGURATION
 //--------------------------------------------------------------------
-#define CFG_TUD_HID_EP_BUFSIZE    16
+#define CFG_TUD_HID_EP_BUFSIZE    8
 
 #ifdef __cplusplus
 }
