@@ -2,10 +2,23 @@
 #include <stdio.h>
 #include "hid_keycodes.h"
 
-// libtwl Header nur für den Cartridge-Zugriff
+#include <libtwl/gfx/gfxStatus.h>
 #include <libtwl/mem/memExtern.h>
+#include <libtwl/rtos/rtosIrq.h>
+#include <libtwl/rtos/rtosThread.h>
+#include <libtwl/rtos/rtosEvent.h>
+#include <libtwl/ipc/ipcSync.h>
+#include <libtwl/ipc/ipcFifoSystem.h>
+#include "dldiIpc.h"
 
 #define SHARED_KEY_ADDR 0x02300000
+
+static rtos_event_t sVblankEvent;
+
+static void vblankIrq(u32 irqMask) {
+    (void)irqMask;
+    rtos_signalEvent(&sVblankEvent);
+}
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
     return ((u32)modifier << 24) | ((u32)keycode << 16);
@@ -45,23 +58,38 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     return 0;
 }
 
-int main(void) {
-    // 1. Hardware-Stabilisierung aus dem libtwl-Bootloader
+int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+
+    // --- 1. DSpico Boot-Routine ---
     *(vu32*)0x04000000 = 0x10000;
     *(vu16*)0x05000000 = 31 << 10;
     *(vu16*)0x0400006C = 0;
 
-    // Cartridge-Rechte für USB an den ARM7 übergeben
     mem_setDsCartridgeCpu(EXMEMCNT_SLOT1_CPU_ARM7);
 
-    // 2. Lebenswichtiger Hardware-Spinlock (ohne fehleranfälliges libtwl FIFO)
-    while (((REG_IPC_SYNC >> 8) & 0x0F) != 7);
-    REG_IPC_SYNC = (REG_IPC_SYNC & 0xFFF0) | 6;
+    rtos_initIrq();
+    rtos_startMainThread();
+    ipc_initFifoSystem();
 
-    // 3. System für libnds isolieren und starten
-    irqInit();
-    irqEnable(IRQ_VBLANK);
+    rtos_createEvent(&sVblankEvent);
 
+    while (ipc_getArm7SyncBits() != 7);
+
+    if (dldi_init()) {
+        *(vu16*)0x05000000 = (31 << 5); 
+    } else {
+        *(vu16*)0x05000000 = 31;        
+    }
+
+    ipc_setArm9SyncBits(6);
+
+    rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
+    rtos_enableIrqMask(RTOS_IRQ_VBLANK);
+    gfx_setVBlankIrqEnabled(true);
+
+    // --- 2. Passiver libnds UI Start ---
     powerOn(POWER_ALL_2D);
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
@@ -98,7 +126,7 @@ int main(void) {
     bool touch_key_active = false;
     
     while (1) {
-        swiWaitForVBlank();
+        rtos_waitEvent(&sVblankEvent, true, true);
         scanKeys();
         
         u32 keys_down = keysDown();
