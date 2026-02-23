@@ -1,6 +1,7 @@
 #include <nds.h>
 #include <stdio.h>
 #include "hid_keycodes.h"
+
 #include <libtwl/gfx/gfxStatus.h>
 #include <libtwl/mem/memExtern.h>
 #include <libtwl/rtos/rtosIrq.h>
@@ -8,8 +9,16 @@
 #include <libtwl/rtos/rtosEvent.h>
 #include <libtwl/ipc/ipcSync.h>
 #include <libtwl/ipc/ipcFifoSystem.h>
+#include "dldiIpc.h"
 
 #define SHARED_KEY_ADDR 0x02300000
+
+static rtos_event_t sVblankEvent;
+
+// Der sichere VBlank-Handler von libtwl
+static void vblankIrq(u32 irqMask) {
+    rtos_signalEvent(&sVblankEvent);
+}
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
     return ((u32)modifier << 24) | ((u32)keycode << 16);
@@ -50,7 +59,6 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
 }
 
 int main(int argc, char* argv[]) {
-    // 1. DSpico / libtwl Hardware-Reset und Initialisierung
     *(vu32*)0x04000000 = 0x10000;
     *(vu16*)0x05000000 = 31 << 10;
     *(vu16*)0x0400006C = 0;
@@ -61,15 +69,27 @@ int main(int argc, char* argv[]) {
     rtos_startMainThread();
     ipc_initFifoSystem();
 
-    // 2. Hardware-Handschlag mit ARM7
+    rtos_createEvent(&sVblankEvent);
+
     while (ipc_getArm7SyncBits() != 7);
+
+    // ZWINGEND ERFORDERLICH FÜR NDS LITE LOADER
+    if (dldi_init()) {
+        *(vu16*)0x05000000 = (31 << 5);
+    } else {
+        *(vu16*)0x05000000 = 31;
+    }
+
     ipc_setArm9SyncBits(6);
 
-    // 3. System für libnds-Tastatur übernehmen und Bildschirm einrichten
-    irqInit();
-    irqEnable(IRQ_VBLANK);
+    rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
+    rtos_enableIrqMask(RTOS_IRQ_VBLANK);
+    gfx_setVBlankIrqEnabled(true);
+    // ------------------------------------------------------------------------
+
+    // --- 2. KEYBOARD & HUD STARTEN (Ohne libnds Systemeingriffe!) ---
+    // irqInit() und irqEnable() sind restlos entfernt, um libtwl nicht zu zerstören.
     
-    powerOn(POWER_ALL_2D);
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
     vramSetBankA(VRAM_A_MAIN_BG);
@@ -87,8 +107,8 @@ int main(int argc, char* argv[]) {
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
     
     consoleClear();
-    iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
-    iprintf("\x1b[2;1H  Status: USB Aktiv");
+    iprintf("\x1b[1;1H  PicoKeyboard v2.0.2");
+    iprintf("\x1b[2;1H  Status: Boot OK");
     iprintf("\x1b[3;1H  ----------------------");
     iprintf("\x1b[4;1H  Hardware-Tasten:");
     iprintf("\x1b[5;1H    A/B     = a/b");
@@ -105,7 +125,8 @@ int main(int argc, char* argv[]) {
     bool touch_key_active = false;
     
     while (1) {
-        swiWaitForVBlank();
+        rtos_waitEvent(&sVblankEvent, true, true);
+        
         scanKeys();
         
         u32 keys_down = keysDown();
