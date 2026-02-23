@@ -12,6 +12,7 @@
 #include <libtwl/mem/memSwap.h>
 #include <libtwl/i2c/i2cMcu.h>
 #include <libtwl/spi/spiPmic.h>
+#include <libtwl/ipc/ipcSync.h>
 #include "ExitMode.h"
 #include "Arm7State.h"
 #include "tusb.h"
@@ -96,6 +97,14 @@ static void initializeArm7() {
         rtos_setIrq2Func(RTOS_IRQ2_MCU, mcuIrq);
         rtos_enableIrq2Mask(RTOS_IRQ2_MCU);
     }
+
+    // --- DSPICO HARDWARE HANDSHAKE ---
+    // Der ARM7 signalisiert Bereitschaft und wartet auf die Cartridge-Rechte vom ARM9
+    ipc_setArm7SyncBits(7);
+    while (ipc_getArm9SyncBits() != 6) {
+        rtos_waitEvent(&sVBlankEvent, true, true);
+    }
+    // ---------------------------------
 
     tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
     tusb_init(0, &dev_init);
