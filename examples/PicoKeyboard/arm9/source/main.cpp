@@ -1,8 +1,13 @@
 #include <nds.h>
 #include <stdio.h>
 #include "hid_keycodes.h"
+#include <libtwl/gfx/gfxStatus.h>
 #include <libtwl/mem/memExtern.h>
+#include <libtwl/rtos/rtosIrq.h>
+#include <libtwl/rtos/rtosThread.h>
+#include <libtwl/rtos/rtosEvent.h>
 #include <libtwl/ipc/ipcSync.h>
+#include <libtwl/ipc/ipcFifoSystem.h>
 
 #define SHARED_KEY_ADDR 0x02300000
 
@@ -44,25 +49,26 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     return 0;
 }
 
-// Die Signatur exakt wie in der funktionierenden Massenspeicher-App
 int main(int argc, char* argv[]) {
-    // 1. HARDWARE-RESET (Behebt schwarze/weiße Bildschirme beim Start)
+    // 1. DSpico / libtwl Hardware-Reset und Initialisierung
     *(vu32*)0x04000000 = 0x10000;
     *(vu16*)0x05000000 = 31 << 10;
     *(vu16*)0x0400006C = 0;
 
-    // 2. Cartridge-Rechte an ARM7 (RP2040 Chip) abgeben
     mem_setDsCartridgeCpu(EXMEMCNT_SLOT1_CPU_ARM7);
 
-    // 3. LibNDS IRQs initialisieren (Zwingend, damit swiWaitForVBlank nicht einfriert!)
-    irqInit();
-    irqEnable(IRQ_VBLANK);
+    rtos_initIrq();
+    rtos_startMainThread();
+    ipc_initFifoSystem();
 
-    // 4. Hardware-Handschlag mit ARM7
+    // 2. Hardware-Handschlag mit ARM7
     while (ipc_getArm7SyncBits() != 7);
     ipc_setArm9SyncBits(6);
 
-    // --- Ab hier läuft der normale Tastatur-Code ---
+    // 3. System für libnds-Tastatur übernehmen und Bildschirm einrichten
+    irqInit();
+    irqEnable(IRQ_VBLANK);
+    
     powerOn(POWER_ALL_2D);
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
@@ -81,7 +87,7 @@ int main(int argc, char* argv[]) {
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
     
     consoleClear();
-    iprintf("\x1b[1;1H  PicoKeyboard v2.0.1");
+    iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
     iprintf("\x1b[2;1H  Status: USB Aktiv");
     iprintf("\x1b[3;1H  ----------------------");
     iprintf("\x1b[4;1H  Hardware-Tasten:");
