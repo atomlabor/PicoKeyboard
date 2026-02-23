@@ -1,6 +1,5 @@
 #include <nds.h>
 #include <stdio.h>
-#include "hid_keycodes.h"
 
 #define SHARED_KEY_ADDR 0x02300000
 
