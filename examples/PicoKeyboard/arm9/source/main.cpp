@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "hid_keycodes.h"
 
+// libtwl Header
 #include <libtwl/gfx/gfxStatus.h>
 #include <libtwl/mem/memExtern.h>
 #include <libtwl/rtos/rtosIrq.h>
@@ -9,7 +10,6 @@
 #include <libtwl/rtos/rtosEvent.h>
 #include <libtwl/ipc/ipcSync.h>
 #include <libtwl/ipc/ipcFifoSystem.h>
-#include "dldiIpc.h"
 
 #define SHARED_KEY_ADDR 0x02300000
 
@@ -59,6 +59,7 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
 }
 
 int main(int argc, char* argv[]) {
+    // --- 1. KUGELSICHERER DSPICO SYSTEM-START ---
     *(vu32*)0x04000000 = 0x10000;
     *(vu16*)0x05000000 = 31 << 10;
     *(vu16*)0x0400006C = 0;
@@ -73,13 +74,6 @@ int main(int argc, char* argv[]) {
 
     while (ipc_getArm7SyncBits() != 7);
 
-    // ZWINGEND ERFORDERLICH FÜR NDS LITE LOADER
-    if (dldi_init()) {
-        *(vu16*)0x05000000 = (31 << 5);
-    } else {
-        *(vu16*)0x05000000 = 31;
-    }
-
     ipc_setArm9SyncBits(6);
 
     rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
@@ -87,9 +81,7 @@ int main(int argc, char* argv[]) {
     gfx_setVBlankIrqEnabled(true);
     // ------------------------------------------------------------------------
 
-    // --- 2. KEYBOARD & HUD STARTEN (Ohne libnds Systemeingriffe!) ---
-    // irqInit() und irqEnable() sind restlos entfernt, um libtwl nicht zu zerstören.
-    
+    // --- 2. KEYBOARD & HUD STARTEN ---
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
     vramSetBankA(VRAM_A_MAIN_BG);
@@ -125,6 +117,7 @@ int main(int argc, char* argv[]) {
     bool touch_key_active = false;
     
     while (1) {
+        // WICHTIG: rtos_waitEvent ersetzt swiWaitForVBlank!
         rtos_waitEvent(&sVblankEvent, true, true);
         
         scanKeys();
