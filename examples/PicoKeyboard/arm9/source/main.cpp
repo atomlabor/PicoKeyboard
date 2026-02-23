@@ -78,17 +78,13 @@ int main(void) {
     keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
     keyboardShow();
     
-
     volatile u32* shared_key = (volatile u32*)SHARED_KEY_ADDR;
     *shared_key = 0xFFFFFFFF; 
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
     
     consoleClear();
     iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
-    iprintf("\x1b[3;1H  USB Status: ACTIVE");
-    iprintf("\x1b[5;1H  L-Button: Backspace");
-    iprintf("\x1b[6;1H  R-Button: Escape");
-    iprintf("\x1b[7;1H  START:    Enter");
+    iprintf("\x1b[3;1H  USB HID: READY");
 
     bool touch_active = false;
 
@@ -113,11 +109,11 @@ int main(void) {
             touch_active = false;
         }
 
-        if (kDown & KEY_START)  { keycode = HID_KEY_ENTER; send = true; }
-        if (kDown & KEY_L)      { keycode = HID_KEY_BACKSPACE; send = true; }
-        if (kDown & KEY_R)      { keycode = HID_KEY_ESCAPE; send = true; }
-        if (kDown & KEY_UP)     { keycode = HID_KEY_ARROW_UP; send = true; }
-        if (kDown & KEY_DOWN)   { keycode = HID_KEY_ARROW_DOWN; send_key = true; }
+        if (kDown & KEY_START) { keycode = HID_KEY_ENTER; send = true; }
+        if (kDown & KEY_L)     { keycode = HID_KEY_BACKSPACE; send = true; }
+        if (kDown & KEY_R)     { keycode = HID_KEY_ESCAPE; send = true; }
+        if (kDown & KEY_UP)    { keycode = HID_KEY_ARROW_UP; send = true; }
+        if (kDown & KEY_DOWN)  { keycode = HID_KEY_ARROW_DOWN; send = true; }
         
         if (kUp & (KEY_START | KEY_L | KEY_R | KEY_UP | KEY_DOWN)) {
             release = true;
