@@ -34,37 +34,19 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     if (c == '\n' || c == '\r') return HID_KEY_ENTER;
     if (c == 8 || c == 127) return HID_KEY_BACKSPACE;
     if (c == '\t') return HID_KEY_TAB;
-    if (c == '-') return 45; 
-    if (c == '=') return 46; 
-    if (c == '[') return 47; 
-    if (c == ']') return 48; 
-    if (c == '\\') return 49; 
-    if (c == ';') return 51; 
-    if (c == '\'') return 52; 
-    if (c == '`') return 53; 
-    if (c == ',') return 54; 
-    if (c == '.') return 55; 
-    if (c == '/') return 56; 
-    if (c == '!') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_1; }
-    if (c == '@') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_2; }
-    if (c == '#') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_3; }
-    if (c == '$') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_4; }
-    if (c == '%') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_5; }
-    if (c == '^') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_6; }
-    if (c == '&') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_7; }
-    if (c == '*') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_8; }
-    if (c == '(') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_9; }
-    if (c == ')') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_0; }
+    
+    switch(c) {
+        case '-': return 45; case '=': return 46; case '[': return 47;
+        case ']': return 48; case '\\': return 49; case ';': return 51;
+        case '\'': return 52; case '`': return 53; case ',': return 54;
+        case '.': return 55; case '/': return 56;
+    }
     return 0;
 }
 
-int main(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
-
-    // --- 1. DSpico Boot-Routine ---
+int main(void) {
     *(vu32*)0x04000000 = 0x10000;
-    *(vu16*)0x05000000 = 31 << 10;
+    *(vu16*)0x05000000 = 31 << 10; 
     *(vu16*)0x0400006C = 0;
 
     mem_setDsCartridgeCpu(EXMEMCNT_SLOT1_CPU_ARM7);
@@ -72,16 +54,11 @@ int main(int argc, char* argv[]) {
     rtos_initIrq();
     rtos_startMainThread();
     ipc_initFifoSystem();
-
     rtos_createEvent(&sVblankEvent);
 
     while (ipc_getArm7SyncBits() != 7);
 
-    if (dldi_init()) {
-        *(vu16*)0x05000000 = (31 << 5); 
-    } else {
-        *(vu16*)0x05000000 = 31;        
-    }
+    dldi_init();
 
     ipc_setArm9SyncBits(6);
 
@@ -89,8 +66,6 @@ int main(int argc, char* argv[]) {
     rtos_enableIrqMask(RTOS_IRQ_VBLANK);
     gfx_setVBlankIrqEnabled(true);
 
-    // --- 2. Passiver libnds UI Start ---
-    powerOn(POWER_ALL_2D);
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
     vramSetBankA(VRAM_A_MAIN_BG);
@@ -103,73 +78,58 @@ int main(int argc, char* argv[]) {
     keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
     keyboardShow();
     
+
     volatile u32* shared_key = (volatile u32*)SHARED_KEY_ADDR;
-    *shared_key = 0xFFFFFFFF;
+    *shared_key = 0xFFFFFFFF; 
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
     
     consoleClear();
     iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
-    iprintf("\x1b[2;1H  Status: Boot OK");
-    iprintf("\x1b[3;1H  ----------------------");
-    iprintf("\x1b[4;1H  Hardware Keys:");
-    iprintf("\x1b[5;1H    A/B     = a/b");
-    iprintf("\x1b[6;1H    START   = Enter");
-    iprintf("\x1b[7;1H    SELECT  = Space");
-    iprintf("\x1b[8;1H    D-Pad   = Arrows");
-    iprintf("\x1b[9;1H    L       = Backspace");
-    iprintf("\x1b[10;1H    R       = Escape");
-    iprintf("\x1b[11;1H  ----------------------");
-    iprintf("\x1b[12;1H  Touchscreen: Active");
-    iprintf("\x1b[13;1H  ----------------------");
-    iprintf("\x1b[15;1H  Connection: DSpico");
-    
-    bool touch_key_active = false;
-    
+    iprintf("\x1b[3;1H  USB Status: ACTIVE");
+    iprintf("\x1b[5;1H  L-Button: Backspace");
+    iprintf("\x1b[6;1H  R-Button: Escape");
+    iprintf("\x1b[7;1H  START:    Enter");
+
+    bool touch_active = false;
+
     while (1) {
         rtos_waitEvent(&sVblankEvent, true, true);
         scanKeys();
         
-        u32 keys_down = keysDown();
-        u32 keys_up   = keysUp();
+        u32 kDown = keysDown();
+        u32 kUp = keysUp();
         int touch_char = keyboardUpdate();
         
-        uint8_t keycode  = 0;
+        uint8_t keycode = 0;
         uint8_t modifier = 0;
-        bool send_key    = false;
-        bool send_release = false;
-        
+        bool send = false;
+        bool release = false;
+
         if (touch_char > 0) {
             keycode = ascii_to_hid(touch_char, &modifier);
-            if (keycode > 0) { send_key = true; touch_key_active = true; }
+            if (keycode > 0) { send = true; touch_active = true; }
+        } else if (touch_active && touch_char == 0) {
+            release = true;
+            touch_active = false;
         }
-        else if (keys_down & KEY_A)      { keycode = HID_KEY_A;           send_key = true; }
-        else if (keys_down & KEY_B)      { keycode = HID_KEY_B;           send_key = true; }
-        else if (keys_down & KEY_START)  { keycode = HID_KEY_ENTER;       send_key = true; }
-        else if (keys_down & KEY_SELECT) { keycode = HID_KEY_SPACE;       send_key = true; }
-        else if (keys_down & KEY_UP)     { keycode = HID_KEY_ARROW_UP;    send_key = true; }
-        else if (keys_down & KEY_DOWN)   { keycode = HID_KEY_ARROW_DOWN;  send_key = true; }
-        else if (keys_down & KEY_LEFT)   { keycode = HID_KEY_ARROW_LEFT;  send_key = true; }
-        else if (keys_down & KEY_RIGHT)  { keycode = HID_KEY_ARROW_RIGHT; send_key = true; }
-        else if (keys_down & KEY_L)      { keycode = HID_KEY_BACKSPACE;   send_key = true; }
-        else if (keys_down & KEY_R)      { keycode = HID_KEY_ESCAPE;      send_key = true; }
+
+        if (kDown & KEY_START)  { keycode = HID_KEY_ENTER; send = true; }
+        if (kDown & KEY_L)      { keycode = HID_KEY_BACKSPACE; send = true; }
+        if (kDown & KEY_R)      { keycode = HID_KEY_ESCAPE; send = true; }
+        if (kDown & KEY_UP)     { keycode = HID_KEY_ARROW_UP; send = true; }
+        if (kDown & KEY_DOWN)   { keycode = HID_KEY_ARROW_DOWN; send_key = true; }
         
-        if (keys_up & (KEY_A | KEY_B | KEY_START | KEY_SELECT | KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT | KEY_L | KEY_R)) {
-            send_release = true;
-        } else if (touch_key_active && touch_char == 0) {
-            send_release = true;
-            touch_key_active = false;
+        if (kUp & (KEY_START | KEY_L | KEY_R | KEY_UP | KEY_DOWN)) {
+            release = true;
         }
-        
-        if (send_key) {
+
+        if (send) {
             *shared_key = make_hid_message(modifier, keycode);
             DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
-        }
-        
-        if (send_release) {
+        } else if (release) {
             *shared_key = make_hid_message(0, 0);
             DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
         }
     }
-    
     return 0;
 }
