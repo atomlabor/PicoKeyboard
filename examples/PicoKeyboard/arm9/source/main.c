@@ -27,27 +27,30 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier)
 
 int main(void)
 {
-    // Video-Setup: Oberes Display = Statusanzeige, Unteres Display = Tastatur
-    powerOn(POWER_ALL_2D);
-
-    // Oberes Display: Textmodus für Statusanzeige
+    // Video-Setup: Strikt getrennt, damit es keine Grafik-Fehler gibt
     videoSetMode(MODE_0_2D);
-    vramSetBankA(VRAM_A_MAIN_BG);
-    PrintConsole *topScreen = consoleDemoInit();
-
-    // Unteres Display: Tastatur
     videoSetModeSub(MODE_0_2D);
+
+    vramSetBankA(VRAM_A_MAIN_BG);
     vramSetBankC(VRAM_C_SUB_BG);
 
-    // FIFO initialisieren (vor keyboardInit!)
-    fifoInit();
+    // Oberes Display: Sauberer Textmodus (statt consoleDemoInit)
+    PrintConsole topScreen;
+    consoleInit(&topScreen, 0, BgType_Text4bpp, BgSize_T_256x256, 31, 0, true, true);
+    consoleSelect(&topScreen);
 
-    // Touchscreen-Tastatur auf dem unteren Display
+    // Unteres Display: Tastatur initialisieren
     keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
     keyboardShow();
 
+    // WICHTIG: Das DSpico ARM7-Betriebssystem wartet auf dieses "Go"-Signal!
+    // Ohne diese Zeile bleibt der ARM7 hängen und der USB-Port startet niemals.
+    REG_IPC_SYNC = (REG_IPC_SYNC & 0xF0FF) | (6 << 8);
+
+    // FIFO initialisieren
+    fifoInit();
+
     // Status auf dem oberen Display
-    consoleSelect(topScreen);
     consoleClear();
     iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
     iprintf("\x1b[2;1H  Status: USB Active");
@@ -55,7 +58,7 @@ int main(void)
     iprintf("\x1b[5;1H  A/B = a/b");
     iprintf("\x1b[6;1H  START = Enter");
     iprintf("\x1b[7;1H  SELECT = Space");
-    iprintf("\x1b[8;1H  UP/DOWN/LEFT/RIGHT");
+    iprintf("\x1b[8;1H  DPAD = Arrows");
     iprintf("\x1b[9;1H  L = Backspace");
     iprintf("\x1b[10;1H  R = Escape");
     iprintf("\x1b[12;1H  Touchscreen: aktiv");
@@ -64,7 +67,10 @@ int main(void)
 
     while (1)
     {
+        // VBlank gehört IMMER an den Anfang der Schleife für flüssiges Timing
+        swiWaitForVBlank(); 
         scanKeys();
+        
         u32 keys_down = keysDown();
         u32 keys_up   = keysUp();
         int touch_char = keyboardUpdate();
@@ -103,12 +109,12 @@ int main(void)
             touch_key_active = false;
         }
 
-        if (send_key)
+        if (send_key) {
             fifoSendValue32(FIFO_KEYBOARD, make_hid_message(modifier, keycode));
-        if (send_release)
+        }
+        if (send_release) {
             fifoSendValue32(FIFO_KEYBOARD, make_hid_message(0, 0));
-
-        swiWaitForVBlank();
+        }
     }
 
     return 0;
