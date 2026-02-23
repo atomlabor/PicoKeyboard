@@ -1,105 +1,133 @@
-#include <nds.h>
-#include <stdio.h>
+#include "common.h"
+#include <libtwl/rtos/rtosIrq.h>
+#include <libtwl/rtos/rtosThread.h>
+#include <libtwl/rtos/rtosEvent.h>
+#include <libtwl/sound/soundChannel.h>
+#include <libtwl/timer/timer.h>
+#include <libtwl/sound/sound.h>
+#include <libtwl/sys/sysPower.h>
+#include <libtwl/sio/sioRtc.h>
+#include <libtwl/sio/sio.h>
+#include <libtwl/gfx/gfxStatus.h>
+#include <libtwl/mem/memSwap.h>
+#include <libtwl/i2c/i2cMcu.h>
+#include <libtwl/spi/spiPmic.h>
+#include "ExitMode.h"
+#include "Arm7State.h"
+#include "tusb.h"
 
-#define SHARED_KEY_ADDR 0x02300000
+rtos_mutex_t gCardMutex;
+static rtos_event_t sVBlankEvent;
+static ExitMode sExitMode;
+static Arm7State sState;
+static volatile u8 sMcuIrqFlag = false;
 
-static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
-    return ((u32)modifier << 24) | ((u32)keycode << 16);
+static rtos_thread_t sUsbThread;
+static u32 sUsbThreadStack[512];
+
+static void vblankIrq(u32 irqMask) {
+    (void)irqMask;
+    rtos_signalEvent(&sVBlankEvent);
 }
 
-static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
-    *modifier = 0;
-    if (c >= 'a' && c <= 'z') return HID_KEY_A + (c - 'a');
-    if (c >= 'A' && c <= 'Z') {
-        *modifier = KEYBOARD_MODIFIER_LEFTSHIFT;
-        return HID_KEY_A + (c - 'A');
-    }
-    if (c >= '1' && c <= '9') return HID_KEY_1 + (c - '1');
-    if (c == '0')               return HID_KEY_0;
-    if (c == ' ')               return HID_KEY_SPACE;
-    if (c == '\n' || c == '\r') return HID_KEY_ENTER;
-    if (c == 8)                 return HID_KEY_BACKSPACE;
-    return 0;
+static void mcuIrq(u32 irq2Mask) {
+    (void)irq2Mask;
+    sMcuIrqFlag = true;
 }
 
-int main(void) {
-    defaultExceptionHandler();
-    
-    powerOn(POWER_ALL_2D);
-    videoSetMode(MODE_0_2D);
-    videoSetModeSub(MODE_0_2D);
-    vramSetBankA(VRAM_A_MAIN_BG);
-    vramSetBankC(VRAM_C_SUB_BG);
-
-    PrintConsole topScreen;
-    consoleInit(&topScreen, 0, BgType_Text4bpp, BgSize_T_256x256, 31, 0, true, true);
-    consoleSelect(&topScreen);
-
-    keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
-    keyboardShow();
-
-    volatile u32* shared_key = (volatile u32*)SHARED_KEY_ADDR;
-    *shared_key = 0xFFFFFFFF;
-    DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
-
-    consoleClear();
-    iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
-    iprintf("\x1b[2;1H  Status: USB Active");
-    iprintf("\x1b[4;1H  Buttons:");
-    iprintf("\x1b[5;1H  A/B = a/b");
-    iprintf("\x1b[6;1H  START = Enter");
-    iprintf("\x1b[7;1H  SELECT = Space");
-    iprintf("\x1b[12;1H  Touchscreen: aktiv");
-
-    bool touch_key_active = false;
-
-    while (1) {
-        swiWaitForVBlank();
-        scanKeys();
-        
-        u32 keys_down = keysDown();
-        u32 keys_up   = keysUp();
-        int touch_char = keyboardUpdate();
-
-        uint8_t keycode  = 0;
-        uint8_t modifier = 0;
-        bool send_key    = false;
-        bool send_release = false;
-
-        if (touch_char > 0) {
-            keycode = ascii_to_hid(touch_char, &modifier);
-            if (keycode > 0) {
-                send_key = true;
-                touch_key_active = true;
+static void checkMcuIrq(void) {
+    if (isDSiMode()) {
+        if (mem_swapByte(false, &sMcuIrqFlag)) {
+            u32 irqMask = mcu_getIrqMask();
+            if (irqMask & MCU_IRQ_RESET) {
+                sExitMode = ExitMode::Reset;
+                sState = Arm7State::ExitRequested;
+            } else if (irqMask & MCU_IRQ_POWER_OFF) {
+                sExitMode = ExitMode::PowerOff;
+                sState = Arm7State::ExitRequested;
             }
         }
-        else if (keys_down & KEY_A)      { keycode = HID_KEY_A;           send_key = true; }
-        else if (keys_down & KEY_B)      { keycode = HID_KEY_B;           send_key = true; }
-        else if (keys_down & KEY_START)  { keycode = HID_KEY_ENTER;       send_key = true; }
-        else if (keys_down & KEY_SELECT) { keycode = HID_KEY_SPACE;       send_key = true; }
-        else if (keys_down & KEY_UP)     { keycode = HID_KEY_ARROW_UP;    send_key = true; }
-        else if (keys_down & KEY_DOWN)   { keycode = HID_KEY_ARROW_DOWN;  send_key = true; }
-        else if (keys_down & KEY_LEFT)   { keycode = HID_KEY_ARROW_LEFT;  send_key = true; }
-        else if (keys_down & KEY_RIGHT)  { keycode = HID_KEY_ARROW_RIGHT; send_key = true; }
-        else if (keys_down & KEY_L)      { keycode = HID_KEY_BACKSPACE;   send_key = true; }
-        else if (keys_down & KEY_R)      { keycode = HID_KEY_ESCAPE;      send_key = true; }
+    }
+}
 
-        if (keys_up & (KEY_A | KEY_B | KEY_START | KEY_SELECT |
-                       KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT | KEY_L | KEY_R)) {
-            send_release = true;
-        } else if (touch_key_active && touch_char == 0) {
-            send_release = true;
-            touch_key_active = false;
-        }
+static void usbThreadMain(void* arg) {
+    (void)arg;
+    volatile u32* shared_key = (volatile u32*)0x02300000; 
+    uint8_t sHidReport[8] = {0};
 
-        if (send_key) {
-            *shared_key = make_hid_message(modifier, keycode);
-            DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
+    while (true) {
+        tud_task();
+
+        u32 val = *shared_key;
+        if (val != 0xFFFFFFFF) {
+            sHidReport[0] = (val >> 24) & 0xFF; 
+            sHidReport[2] = (val >> 16) & 0xFF; 
+
+            if (tud_hid_ready()) {
+                tud_hid_report(0, sHidReport, sizeof(sHidReport));
+            }
+            *shared_key = 0xFFFFFFFF; 
         }
-        if (send_release) {
-            *shared_key = make_hid_message(0, 0);
-            DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
+    }
+}
+
+static void initializeArm7() {
+    rtos_initIrq();
+    rtos_startMainThread();
+
+    rtos_createMutex(&gCardMutex);
+    dmaFillWords(0, (void*)0x04000400, 0x100);
+    pmic_setAmplifierEnable(true);
+    sys_setSoundPower(true);
+    pmic_setPowerLedBlink(PMIC_CONTROL_POWER_LED_BLINK_NONE);
+    sio_setGpioSiIrq(false);
+    sio_setGpioMode(RCNT0_L_MODE_GPIO);
+    rtc_init();
+
+    snd_setMasterVolume(127);
+    snd_setMasterEnable(true);
+
+    rtos_createEvent(&sVBlankEvent);
+    rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
+    rtos_enableIrqMask(RTOS_IRQ_VBLANK);
+    gfx_setVBlankIrqEnabled(true);
+
+    if (isDSiMode()) {
+        rtos_setIrq2Func(RTOS_IRQ2_MCU, mcuIrq);
+        rtos_enableIrq2Mask(RTOS_IRQ2_MCU);
+    }
+
+    tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
+    tusb_init(0, &dev_init);
+
+    volatile u32* shared_key = (volatile u32*)0x02300000;
+    *shared_key = 0xFFFFFFFF;
+
+    rtos_createThread(&sUsbThread, 3, usbThreadMain, NULL, sUsbThreadStack, sizeof(sUsbThreadStack));
+    rtos_wakeupThread(&sUsbThread);
+}
+
+static void updateArm7() {
+    checkMcuIrq();
+    if (sState == Arm7State::ExitRequested) {
+        snd_setMasterVolume(0);
+        if (sExitMode == ExitMode::Reset) {
+            mcu_setWarmBootFlag(true);
+            mcu_hardReset();
+        } else {
+            pmic_shutdown();
         }
+        while (true);
+    }
+}
+
+int main() {
+    sState = Arm7State::Idle;
+    initializeArm7();
+
+    while (true) {
+        rtos_waitEvent(&sVBlankEvent, true, true);
+        updateArm7();
     }
     return 0;
 }
