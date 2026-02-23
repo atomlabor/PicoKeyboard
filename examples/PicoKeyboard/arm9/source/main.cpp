@@ -1,24 +1,9 @@
 #include <nds.h>
+#include <fat.h> // ZWINGEND: Zwingt den NDS Loader (nds-bootstrap), die App nicht abstürzen zu lassen!
 #include <stdio.h>
 #include "hid_keycodes.h"
 
-// libtwl Header
-#include <libtwl/gfx/gfxStatus.h>
-#include <libtwl/mem/memExtern.h>
-#include <libtwl/rtos/rtosIrq.h>
-#include <libtwl/rtos/rtosThread.h>
-#include <libtwl/rtos/rtosEvent.h>
-#include <libtwl/ipc/ipcSync.h>
-#include <libtwl/ipc/ipcFifoSystem.h>
-
 #define SHARED_KEY_ADDR 0x02300000
-
-static rtos_event_t sVblankEvent;
-
-// Der sichere VBlank-Handler von libtwl
-static void vblankIrq(u32 irqMask) {
-    rtos_signalEvent(&sVblankEvent);
-}
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
     return ((u32)modifier << 24) | ((u32)keycode << 16);
@@ -59,29 +44,22 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
 }
 
 int main(int argc, char* argv[]) {
-    // --- 1. KUGELSICHERER DSPICO SYSTEM-START ---
-    *(vu32*)0x04000000 = 0x10000;
-    *(vu16*)0x05000000 = 31 << 10;
-    *(vu16*)0x0400006C = 0;
+    // 1. DLDI-TREIBER LADEN (Gegen den "Failed to load arm9" Crash)
+    fatInitDefault();
 
-    mem_setDsCartridgeCpu(EXMEMCNT_SLOT1_CPU_ARM7);
+    // 2. DSPICO HARDWARE ÜBERGABE AN ARM7
+    sysSetCartOwner(BUS_OWNER_ARM7);
 
-    rtos_initIrq();
-    rtos_startMainThread();
-    ipc_initFifoSystem();
+    // 3. HARDWARE HANDSCHLAG (Direkt über das Hardware-Register, ohne libtwl)
+    // Warten, bis der ARM7 bereit ist (ARM7 schreibt eine 7)
+    while (((REG_IPC_SYNC >> 8) & 0x0F) != 7) {
+        swiWaitForVBlank(); // Verhindert einen CPU-Lock
+    }
+    // Dem ARM7 antworten: "Wir sind auch bereit" (ARM9 schreibt eine 6)
+    REG_IPC_SYNC = (REG_IPC_SYNC & 0xFFF0) | 6;
 
-    rtos_createEvent(&sVblankEvent);
-
-    while (ipc_getArm7SyncBits() != 7);
-
-    ipc_setArm9SyncBits(6);
-
-    rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
-    rtos_enableIrqMask(RTOS_IRQ_VBLANK);
-    gfx_setVBlankIrqEnabled(true);
-    // ------------------------------------------------------------------------
-
-    // --- 2. KEYBOARD & HUD STARTEN ---
+    // --- Ab hier läuft das System absolut stabil in purer libnds ---
+    powerOn(POWER_ALL_2D);
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
     vramSetBankA(VRAM_A_MAIN_BG);
@@ -99,7 +77,7 @@ int main(int argc, char* argv[]) {
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
     
     consoleClear();
-    iprintf("\x1b[1;1H  PicoKeyboard v2.0.2");
+    iprintf("\x1b[1;1H  PicoKeyboard v2.0.3");
     iprintf("\x1b[2;1H  Status: Boot OK");
     iprintf("\x1b[3;1H  ----------------------");
     iprintf("\x1b[4;1H  Hardware-Tasten:");
@@ -117,9 +95,7 @@ int main(int argc, char* argv[]) {
     bool touch_key_active = false;
     
     while (1) {
-        // WICHTIG: rtos_waitEvent ersetzt swiWaitForVBlank!
-        rtos_waitEvent(&sVblankEvent, true, true);
-        
+        swiWaitForVBlank();
         scanKeys();
         
         u32 keys_down = keysDown();
