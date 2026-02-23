@@ -1,68 +1,167 @@
-#include <nds.h>
 #include "common.h"
+#include <nds/disc_io.h>
 #include <libtwl/rtos/rtosIrq.h>
 #include <libtwl/rtos/rtosThread.h>
+#include <libtwl/rtos/rtosEvent.h>
+#include <libtwl/sound/soundChannel.h>
+#include <libtwl/timer/timer.h>
+#include <libtwl/sound/sound.h>
+#include <libtwl/ipc/ipcSync.h>
+#include <libtwl/ipc/ipcFifoSystem.h>
+#include <libtwl/sys/sysPower.h>
+#include <libtwl/sio/sioRtc.h>
+#include <libtwl/sio/sio.h>
+#include <libtwl/gfx/gfxStatus.h>
+#include <libtwl/mem/memSwap.h>
+#include <libtwl/i2c/i2cMcu.h>
+#include <libtwl/spi/spiPmic.h>
+#include "ipcServices/DldiIpcService.h"
+#include "ExitMode.h"
+#include "Arm7State.h"
 #include "tusb.h"
 
+static DldiIpcService sDldiIpcService;
 rtos_mutex_t gCardMutex;
 
-#define FIFO_KEYBOARD FIFO_USER_01
+static rtos_event_t sVBlankEvent;
+static ExitMode sExitMode;
+static Arm7State sState;
+static volatile u8 sMcuIrqFlag = false;
 
-static uint8_t sHidReport[8] = {0};
+static rtos_thread_t sUsbThread;
+static u32 sUsbThreadStack[512];
 
-static void keyboard_fifo_handler(u32 value, void* userdata)
-{
-    (void)userdata;
-    uint8_t modifier = (value >> 24) & 0xFF;
-    uint8_t keycode  = (value >> 16) & 0xFF;
+extern FN_MEDIUM_READSECTORS _DLDI_readSectors_ptr;
+extern FN_MEDIUM_WRITESECTORS _DLDI_writeSectors_ptr;
 
-    // Standard HID Tastatur-Report (8 Bytes)
-    sHidReport[0] = modifier;
-    sHidReport[1] = 0; // Reserviert (immer 0)
-    sHidReport[2] = keycode;
-    sHidReport[3] = 0;
-    sHidReport[4] = 0;
-    sHidReport[5] = 0;
-    sHidReport[6] = 0;
-    sHidReport[7] = 0;
+static void vblankIrq(u32 irqMask) {
+    (void)irqMask;
+    rtos_signalEvent(&sVBlankEvent);
+}
 
-    // Nur senden, wenn das USB-Kabel verbunden und der PC bereit ist
-    if (tud_hid_ready())
-    {
-        tud_hid_report(0, sHidReport, sizeof(sHidReport));
+static void mcuIrq(u32 irq2Mask) {
+    (void)irq2Mask;
+    sMcuIrqFlag = true;
+}
+
+static void checkMcuIrq(void) {
+    if (isDSiMode()) {
+        if (mem_swapByte(false, &sMcuIrqFlag)) {
+            u32 irqMask = mcu_getIrqMask();
+            if (irqMask & MCU_IRQ_RESET) {
+                sExitMode = ExitMode::Reset;
+                sState = Arm7State::ExitRequested;
+            } else if (irqMask & MCU_IRQ_POWER_OFF) {
+                sExitMode = ExitMode::PowerOff;
+                sState = Arm7State::ExitRequested;
+            }
+        }
     }
 }
 
-int main()
-{
-    // Standard libnds ARM7 Init - Reihenfolge ist wichtig!
-    irqInit();
-    fifoInit();
-    installSoundFIFO();
-    installSystemFIFO();
-    irqEnable(IRQ_VBLANK);
+static void initializeVBlankIrq() {
+    rtos_createEvent(&sVBlankEvent);
+    rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
+    rtos_enableIrqMask(RTOS_IRQ_VBLANK);
+    gfx_setVBlankIrqEnabled(true);
+}
 
-    // Card Mutex für TinyUSB/DSPico Hardware-Sperre
+// Hier ist der USB-Thread mit dem Shared-RAM Briefkasten
+static void usbThreadMain(void* arg) {
+    (void)arg;
+    // Feste Speicheradresse, die sich ARM7 und ARM9 teilen
+    volatile u32* shared_key = (volatile u32*)0x023FFFE0;
+    uint8_t sHidReport[8] = {0};
+
+    while (true) {
+        tud_task(); // USB am Leben halten
+
+        u32 val = *shared_key;
+        if (val != 0xFFFFFFFF) { // Wenn eine neue Taste im Briefkasten liegt
+            sHidReport[0] = (val >> 24) & 0xFF; // Modifier
+            sHidReport[2] = (val >> 16) & 0xFF; // Keycode
+
+            if (tud_hid_ready()) {
+                tud_hid_report(0, sHidReport, sizeof(sHidReport));
+            }
+            *shared_key = 0xFFFFFFFF; // Briefkasten wieder leeren
+        }
+    }
+}
+
+static void initializeArm7() {
+    rtos_initIrq();
+    rtos_startMainThread();
+    ipc_initFifoSystem();
     rtos_createMutex(&gCardMutex);
 
-    // FIFO Handler für Keyboard vom ARM9
-    fifoSetValue32Handler(FIFO_KEYBOARD, keyboard_fifo_handler, NULL);
+    dmaFillWords(0, (void*)0x04000400, 0x100);
+    pmic_setAmplifierEnable(true);
+    sys_setSoundPower(true);
+    readUserSettings();
+    pmic_setPowerLedBlink(PMIC_CONTROL_POWER_LED_BLINK_NONE);
+    sio_setGpioSiIrq(false);
+    sio_setGpioMode(RCNT0_L_MODE_GPIO);
+    rtc_init();
+    sDldiIpcService.Start();
+    snd_setMasterVolume(127);
+    snd_setMasterEnable(true);
+    initializeVBlankIrq();
 
-    // TinyUSB initialisieren: Dem System explizit sagen, dass es ein "Device" ist
-    tusb_rhport_init_t dev_init =
-    {
-        .role = TUSB_ROLE_DEVICE,
-        .speed = TUSB_SPEED_AUTO
-    };
-    tusb_init(0, &dev_init);
-
-    // Die USB-Endlosschleife
-    while (true)
-    {
-        // tud_task() muss im Dauerfeuer laufen, um USB-Timeouts 
-        // auf der Host-Seite (Mac/PC) zu verhindern!
-        tud_task();
+    if (isDSiMode()) {
+        rtos_setIrq2Func(RTOS_IRQ2_MCU, mcuIrq);
+        rtos_enableIrq2Mask(RTOS_IRQ2_MCU);
     }
 
+    ipc_setArm7SyncBits(7);
+    while (ipc_getArm9SyncBits() != 6) {
+        rtos_waitEvent(&sVBlankEvent, true, true);
+    }
+
+    tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
+    tusb_init(0, &dev_init);
+
+    // Briefkasten beim Start leeren
+    volatile u32* shared_key = (volatile u32*)0x023FFFE0;
+    *shared_key = 0xFFFFFFFF;
+
+    rtos_createThread(&sUsbThread, 3, usbThreadMain, NULL, sUsbThreadStack, sizeof(sUsbThreadStack));
+    rtos_wakeupThread(&sUsbThread);
+}
+
+static void updateArm7IdleState() {
+    checkMcuIrq();
+    if (sState == Arm7State::ExitRequested) snd_setMasterVolume(0);
+}
+
+static bool performExit(ExitMode exitMode) {
+    switch (exitMode) {
+        case ExitMode::Reset:
+            mcu_setWarmBootFlag(true);
+            mcu_hardReset();
+            break;
+        case ExitMode::PowerOff:
+            pmic_shutdown();
+            break;
+    }
+    while (true);
+}
+
+static void updateArm7ExitRequestedState() { performExit(sExitMode); }
+
+static void updateArm7() {
+    switch (sState) {
+        case Arm7State::Idle: updateArm7IdleState(); break;
+        case Arm7State::ExitRequested: updateArm7ExitRequestedState(); break;
+    }
+}
+
+int main() {
+    sState = Arm7State::Idle;
+    initializeArm7();
+    while (true) {
+        rtos_waitEvent(&sVBlankEvent, true, true);
+        updateArm7();
+    }
     return 0;
 }
