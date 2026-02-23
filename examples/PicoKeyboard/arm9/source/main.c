@@ -2,8 +2,7 @@
 #include <stdio.h>
 #include "hid_keycodes.h"
 
-// Das ist unser gemeinsamer Briefkasten im RAM
-#define SHARED_KEY_ADDR 0x023FFFE0
+#define SHARED_KEY_ADDR 0x02300000
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
     return ((u32)modifier << 24) | ((u32)keycode << 16);
@@ -25,8 +24,9 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
 }
 
 int main(void) {
+    defaultExceptionHandler();
+    
     powerOn(POWER_ALL_2D);
-
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
     vramSetBankA(VRAM_A_MAIN_BG);
@@ -39,7 +39,6 @@ int main(void) {
     keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
     keyboardShow();
 
-    // Briefkasten beim Start aktivieren
     volatile u32* shared_key = (volatile u32*)SHARED_KEY_ADDR;
     *shared_key = 0xFFFFFFFF;
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
@@ -51,9 +50,6 @@ int main(void) {
     iprintf("\x1b[5;1H  A/B = a/b");
     iprintf("\x1b[6;1H  START = Enter");
     iprintf("\x1b[7;1H  SELECT = Space");
-    iprintf("\x1b[8;1H  DPAD = Arrows");
-    iprintf("\x1b[9;1H  L = Backspace");
-    iprintf("\x1b[10;1H  R = Escape");
     iprintf("\x1b[12;1H  Touchscreen: aktiv");
 
     bool touch_key_active = false;
@@ -97,7 +93,6 @@ int main(void) {
             touch_key_active = false;
         }
 
-        // Tasten in den Briefkasten werfen und den Cache leeren!
         if (send_key) {
             *shared_key = make_hid_message(modifier, keycode);
             DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
@@ -107,6 +102,5 @@ int main(void) {
             DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
         }
     }
-
     return 0;
 }
