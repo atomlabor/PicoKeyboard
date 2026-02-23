@@ -1,203 +1,108 @@
-#include "common.h"
-#include <nds/disc_io.h>
-#include <libtwl/rtos/rtosIrq.h>
-#include <libtwl/rtos/rtosThread.h>
-#include <libtwl/rtos/rtosEvent.h>
-#include <libtwl/sound/soundChannel.h>
-#include <libtwl/timer/timer.h>
-#include <libtwl/sound/sound.h>
-#include <libtwl/ipc/ipcSync.h>
-#include <libtwl/ipc/ipcFifoSystem.h>
-#include <libtwl/sys/sysPower.h>
-#include <libtwl/sio/sioRtc.h>
-#include <libtwl/sio/sio.h>
-#include <libtwl/gfx/gfxStatus.h>
-#include <libtwl/mem/memSwap.h>
-#include <libtwl/i2c/i2cMcu.h>
-#include <libtwl/spi/spiPmic.h>
-#include "ipcServices/DldiIpcService.h"
-#include "ExitMode.h"
-#include "Arm7State.h"
-#include "tusb.h"
+#include <nds.h>
+#include <stdio.h>
+#include "hid_keycodes.h"
 
-static DldiIpcService sDldiIpcService;
-rtos_mutex_t gCardMutex;
+// Die identische, sichere Adresse für den Briefkasten
+#define SHARED_KEY_ADDR 0x02300000
 
-static rtos_event_t sVBlankEvent;
-static ExitMode sExitMode;
-static Arm7State sState;
-static volatile u8 sMcuIrqFlag = false;
-
-// Diese Variablen zwingen den Compiler, DLDI im ROM zu behalten!
-static u32 sSdBlockCount;
-static u8 sSector0Buffer[512] alignas(4);
-
-static rtos_thread_t sUsbThread;
-static u32 sUsbThreadStack[512];
-
-extern FN_MEDIUM_READSECTORS _DLDI_readSectors_ptr;
-extern FN_MEDIUM_WRITESECTORS _DLDI_writeSectors_ptr;
-
-static void vblankIrq(u32 irqMask) {
-    (void)irqMask;
-    rtos_signalEvent(&sVBlankEvent);
+static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
+    return ((u32)modifier << 24) | ((u32)keycode << 16);
 }
 
-static void mcuIrq(u32 irq2Mask) {
-    (void)irq2Mask;
-    sMcuIrqFlag = true;
-}
-
-static void checkMcuIrq(void) {
-    if (isDSiMode()) {
-        if (mem_swapByte(false, &sMcuIrqFlag)) {
-            u32 irqMask = mcu_getIrqMask();
-            if (irqMask & MCU_IRQ_RESET) {
-                sExitMode = ExitMode::Reset;
-                sState = Arm7State::ExitRequested;
-            } else if (irqMask & MCU_IRQ_POWER_OFF) {
-                sExitMode = ExitMode::PowerOff;
-                sState = Arm7State::ExitRequested;
-            }
-        }
+static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
+    *modifier = 0;
+    if (c >= 'a' && c <= 'z') return HID_KEY_A + (c - 'a');
+    if (c >= 'A' && c <= 'Z') {
+        *modifier = KEYBOARD_MODIFIER_LEFTSHIFT;
+        return HID_KEY_A + (c - 'A');
     }
-}
-
-static void initializeVBlankIrq() {
-    rtos_createEvent(&sVBlankEvent);
-    rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
-    rtos_enableIrqMask(RTOS_IRQ_VBLANK);
-    gfx_setVBlankIrqEnabled(true);
-}
-
-// Unser superschneller Briefkasten-Thread
-static void usbThreadMain(void* arg) {
-    (void)arg;
-    volatile u32* shared_key = (volatile u32*)0x023FFFE0;
-    uint8_t sHidReport[8] = {0};
-
-    while (true) {
-        tud_task();
-
-        u32 val = *shared_key;
-        if (val != 0xFFFFFFFF) {
-            sHidReport[0] = (val >> 24) & 0xFF; // Modifier
-            sHidReport[2] = (val >> 16) & 0xFF; // Keycode
-
-            if (tud_hid_ready()) {
-                tud_hid_report(0, sHidReport, sizeof(sHidReport));
-            }
-            *shared_key = 0xFFFFFFFF; // Briefkasten wieder auf "leer" setzen
-        }
-    }
-}
-
-// ZWINGEND ERFORDERLICH: Verhindert, dass der Compiler den DLDI-Treiber löscht
-static u32 findSdCardBlockCount() {
-    rtos_lockMutex(&gCardMutex);
-    _DLDI_readSectors_ptr(0, 1, sSector0Buffer);
-    rtos_unlockMutex(&gCardMutex);
-    
-    u16 footer = *(u16*)(sSector0Buffer + 510);
-    if (footer == 0xAA55) return 1; 
+    if (c >= '1' && c <= '9') return HID_KEY_1 + (c - '1');
+    if (c == '0')               return HID_KEY_0;
+    if (c == ' ')               return HID_KEY_SPACE;
+    if (c == '\n' || c == '\r') return HID_KEY_ENTER;
+    if (c == 8)                 return HID_KEY_BACKSPACE;
     return 0;
 }
 
-static void initializeArm7() {
-    rtos_initIrq();
-    rtos_startMainThread();
-    ipc_initFifoSystem();
+int main(void) {
+    // Fängt unvorhergesehene Abstürze ab und zeigt sie an, statt einfach einzufrieren
+    defaultExceptionHandler();
+    
+    powerOn(POWER_ALL_2D);
+    videoSetMode(MODE_0_2D);
+    videoSetModeSub(MODE_0_2D);
+    vramSetBankA(VRAM_A_MAIN_BG);
+    vramSetBankC(VRAM_C_SUB_BG);
 
-    rtos_createMutex(&gCardMutex);
+    PrintConsole topScreen;
+    consoleInit(&topScreen, 0, BgType_Text4bpp, BgSize_T_256x256, 31, 0, true, true);
+    consoleSelect(&topScreen);
 
-    dmaFillWords(0, (void*)0x04000400, 0x100);
+    keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
+    keyboardShow();
 
-    pmic_setAmplifierEnable(true);
-    sys_setSoundPower(true);
-
-    readUserSettings();
-    pmic_setPowerLedBlink(PMIC_CONTROL_POWER_LED_BLINK_NONE);
-
-    sio_setGpioSiIrq(false);
-    sio_setGpioMode(RCNT0_L_MODE_GPIO);
-
-    rtc_init();
-
-    sDldiIpcService.Start();
-
-    snd_setMasterVolume(127);
-    snd_setMasterEnable(true);
-
-    initializeVBlankIrq();
-
-    if (isDSiMode()) {
-        rtos_setIrq2Func(RTOS_IRQ2_MCU, mcuIrq);
-        rtos_enableIrq2Mask(RTOS_IRQ2_MCU);
-    }
-
-    ipc_setArm7SyncBits(7);
-
-    while (ipc_getArm9SyncBits() != 6) {
-        rtos_waitEvent(&sVBlankEvent, true, true);
-    }
-
-    // DIESER AUFRUF RETTET DEN BOOTVORGANG AUF DER ECHTEN HARDWARE
-    sSdBlockCount = findSdCardBlockCount();
-
-    tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
-    tusb_init(0, &dev_init);
-
-    // Briefkasten initialisieren
-    volatile u32* shared_key = (volatile u32*)0x023FFFE0;
+    volatile u32* shared_key = (volatile u32*)SHARED_KEY_ADDR;
     *shared_key = 0xFFFFFFFF;
+    DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
 
-    rtos_createThread(&sUsbThread, 3, usbThreadMain, NULL, sUsbThreadStack, sizeof(sUsbThreadStack));
-    rtos_wakeupThread(&sUsbThread);
-}
+    consoleClear();
+    iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
+    iprintf("\x1b[2;1H  Status: USB Active");
+    iprintf("\x1b[4;1H  Buttons:");
+    iprintf("\x1b[5;1H  A/B = a/b");
+    iprintf("\x1b[6;1H  START = Enter");
+    iprintf("\x1b[7;1H  SELECT = Space");
+    iprintf("\x1b[12;1H  Touchscreen: aktiv");
 
-static void updateArm7IdleState() {
-    checkMcuIrq();
-    if (sState == Arm7State::ExitRequested) {
-        snd_setMasterVolume(0);
+    bool touch_key_active = false;
+
+    while (1) {
+        swiWaitForVBlank();
+        scanKeys();
+        
+        u32 keys_down = keysDown();
+        u32 keys_up   = keysUp();
+        int touch_char = keyboardUpdate();
+
+        uint8_t keycode  = 0;
+        uint8_t modifier = 0;
+        bool send_key    = false;
+        bool send_release = false;
+
+        if (touch_char > 0) {
+            keycode = ascii_to_hid(touch_char, &modifier);
+            if (keycode > 0) {
+                send_key = true;
+                touch_key_active = true;
+            }
+        }
+        else if (keys_down & KEY_A)      { keycode = HID_KEY_A;           send_key = true; }
+        else if (keys_down & KEY_B)      { keycode = HID_KEY_B;           send_key = true; }
+        else if (keys_down & KEY_START)  { keycode = HID_KEY_ENTER;       send_key = true; }
+        else if (keys_down & KEY_SELECT) { keycode = HID_KEY_SPACE;       send_key = true; }
+        else if (keys_down & KEY_UP)     { keycode = HID_KEY_ARROW_UP;    send_key = true; }
+        else if (keys_down & KEY_DOWN)   { keycode = HID_KEY_ARROW_DOWN;  send_key = true; }
+        else if (keys_down & KEY_LEFT)   { keycode = HID_KEY_ARROW_LEFT;  send_key = true; }
+        else if (keys_down & KEY_RIGHT)  { keycode = HID_KEY_ARROW_RIGHT; send_key = true; }
+        else if (keys_down & KEY_L)      { keycode = HID_KEY_BACKSPACE;   send_key = true; }
+        else if (keys_down & KEY_R)      { keycode = HID_KEY_ESCAPE;      send_key = true; }
+
+        if (keys_up & (KEY_A | KEY_B | KEY_START | KEY_SELECT |
+                       KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT | KEY_L | KEY_R)) {
+            send_release = true;
+        } else if (touch_key_active && touch_char == 0) {
+            send_release = true;
+            touch_key_active = false;
+        }
+
+        if (send_key) {
+            *shared_key = make_hid_message(modifier, keycode);
+            DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
+        }
+        if (send_release) {
+            *shared_key = make_hid_message(0, 0);
+            DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
+        }
     }
-}
-
-static bool performExit(ExitMode exitMode) {
-    switch (exitMode) {
-        case ExitMode::Reset:
-            mcu_setWarmBootFlag(true);
-            mcu_hardReset();
-            break;
-        case ExitMode::PowerOff:
-            pmic_shutdown();
-            break;
-    }
-    while (true); 
-}
-
-static void updateArm7ExitRequestedState() {
-    performExit(sExitMode);
-}
-
-static void updateArm7() {
-    switch (sState) {
-        case Arm7State::Idle:
-            updateArm7IdleState();
-            break;
-        case Arm7State::ExitRequested:
-            updateArm7ExitRequestedState();
-            break;
-    }
-}
-
-int main() {
-    sState = Arm7State::Idle;
-    initializeArm7();
-
-    while (true) {
-        rtos_waitEvent(&sVBlankEvent, true, true);
-        updateArm7();
-    }
-
     return 0;
 }
