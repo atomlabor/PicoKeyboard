@@ -1,9 +1,25 @@
 #include <nds.h>
-#include <fat.h>
 #include <stdio.h>
 #include "hid_keycodes.h"
 
+// libtwl Header aus der Massenspeicher-App
+#include <libtwl/gfx/gfxStatus.h>
+#include <libtwl/mem/memExtern.h>
+#include <libtwl/rtos/rtosIrq.h>
+#include <libtwl/rtos/rtosThread.h>
+#include <libtwl/rtos/rtosEvent.h>
+#include <libtwl/ipc/ipcSync.h>
+#include <libtwl/ipc/ipcFifoSystem.h>
+#include "dldiIpc.h"
+
 #define SHARED_KEY_ADDR 0x02300000
+
+static rtos_event_t sVblankEvent;
+
+// Der sichere VBlank-Handler von libtwl
+static void vblankIrq(u32 irqMask) {
+    rtos_signalEvent(&sVblankEvent);
+}
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
     return ((u32)modifier << 24) | ((u32)keycode << 16);
@@ -44,17 +60,36 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
 }
 
 int main(int argc, char* argv[]) {
-    // 1. Zwingend für nds-bootstrap: Loader-Absturz verhindern
-    fatInitDefault();
+    // --- 1. Exakter Startvorgang der Massenspeicher-App ---
+    *(vu32*)0x04000000 = 0x10000;
+    *(vu16*)0x05000000 = 31 << 10;
+    *(vu16*)0x0400006C = 0;
 
-    // 2. Cartridge-Steuerung an DSpico / ARM7 abgeben
-    sysSetCartOwner(BUS_OWNER_ARM7);
+    mem_setDsCartridgeCpu(EXMEMCNT_SLOT1_CPU_ARM7);
 
-    // 3. LEBENSWICHTIGER SPINLOCK (Kein swiWaitForVBlank nutzen!)
-    while (((REG_IPC_SYNC >> 8) & 0x0F) != 7);
-    REG_IPC_SYNC = (REG_IPC_SYNC & 0xFFF0) | 6;
+    rtos_initIrq();
+    rtos_startMainThread();
+    ipc_initFifoSystem();
 
-    // --- Ab hier läuft reine, kompatible NDS-Grafik ---
+    rtos_createEvent(&sVblankEvent);
+
+    while (ipc_getArm7SyncBits() != 7);
+
+    // Der Schutzschild für nds-bootstrap
+    if (dldi_init()) {
+        *(vu16*)0x05000000 = (31 << 5); // Grüner Blitz bei Erfolg
+    } else {
+        *(vu16*)0x05000000 = 31;        // Roter Blitz bei Fehler
+    }
+
+    ipc_setArm9SyncBits(6);
+
+    rtos_setIrqFunc(RTOS_IRQ_VBLANK, vblankIrq);
+    rtos_enableIrqMask(RTOS_IRQ_VBLANK);
+    gfx_setVBlankIrqEnabled(true);
+    // ------------------------------------------------------
+
+    // --- 2. Keyboard & UI ---
     powerOn(POWER_ALL_2D);
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
@@ -73,25 +108,27 @@ int main(int argc, char* argv[]) {
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
     
     consoleClear();
-    iprintf("\x1b[1;1H  PicoKeyboard v2.0.4");
+    iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
     iprintf("\x1b[2;1H  Status: Boot OK");
     iprintf("\x1b[3;1H  ----------------------");
-    iprintf("\x1b[4;1H  Hardware-Tasten:");
+    iprintf("\x1b[4;1H  Hardware Keys:");
     iprintf("\x1b[5;1H    A/B     = a/b");
     iprintf("\x1b[6;1H    START   = Enter");
-    iprintf("\x1b[7;1H    SELECT  = Leertaste");
-    iprintf("\x1b[8;1H    D-Pad   = Pfeiltasten");
+    iprintf("\x1b[7;1H    SELECT  = Space");
+    iprintf("\x1b[8;1H    D-Pad   = Arrows");
     iprintf("\x1b[9;1H    L       = Backspace");
     iprintf("\x1b[10;1H    R       = Escape");
     iprintf("\x1b[11;1H  ----------------------");
-    iprintf("\x1b[12;1H  Touchscreen: Aktiv");
+    iprintf("\x1b[12;1H  Touchscreen: Active");
     iprintf("\x1b[13;1H  ----------------------");
-    iprintf("\x1b[15;1H  Verbindung: DSpico");
+    iprintf("\x1b[15;1H  Connection: DSpico");
     
     bool touch_key_active = false;
     
     while (1) {
-        swiWaitForVBlank();
+        // Sicheres Warten über libtwl (verhindert IRQ-Konflikte mit libnds)
+        rtos_waitEvent(&sVblankEvent, true, true);
+        
         scanKeys();
         
         u32 keys_down = keysDown();
