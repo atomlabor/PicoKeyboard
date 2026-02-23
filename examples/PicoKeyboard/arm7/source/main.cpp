@@ -28,6 +28,10 @@ static ExitMode sExitMode;
 static Arm7State sState;
 static volatile u8 sMcuIrqFlag = false;
 
+// Diese Variablen zwingen den Compiler, DLDI im ROM zu behalten!
+static u32 sSdBlockCount;
+static u8 sSector0Buffer[512] alignas(4);
+
 static rtos_thread_t sUsbThread;
 static u32 sUsbThreadStack[512];
 
@@ -66,46 +70,64 @@ static void initializeVBlankIrq() {
     gfx_setVBlankIrqEnabled(true);
 }
 
-// Hier ist der USB-Thread mit dem Shared-RAM Briefkasten
+// Unser superschneller Briefkasten-Thread
 static void usbThreadMain(void* arg) {
     (void)arg;
-    // Feste Speicheradresse, die sich ARM7 und ARM9 teilen
     volatile u32* shared_key = (volatile u32*)0x023FFFE0;
     uint8_t sHidReport[8] = {0};
 
     while (true) {
-        tud_task(); // USB am Leben halten
+        tud_task();
 
         u32 val = *shared_key;
-        if (val != 0xFFFFFFFF) { // Wenn eine neue Taste im Briefkasten liegt
+        if (val != 0xFFFFFFFF) {
             sHidReport[0] = (val >> 24) & 0xFF; // Modifier
             sHidReport[2] = (val >> 16) & 0xFF; // Keycode
 
             if (tud_hid_ready()) {
                 tud_hid_report(0, sHidReport, sizeof(sHidReport));
             }
-            *shared_key = 0xFFFFFFFF; // Briefkasten wieder leeren
+            *shared_key = 0xFFFFFFFF; // Briefkasten wieder auf "leer" setzen
         }
     }
+}
+
+// ZWINGEND ERFORDERLICH: Verhindert, dass der Compiler den DLDI-Treiber löscht
+static u32 findSdCardBlockCount() {
+    rtos_lockMutex(&gCardMutex);
+    _DLDI_readSectors_ptr(0, 1, sSector0Buffer);
+    rtos_unlockMutex(&gCardMutex);
+    
+    u16 footer = *(u16*)(sSector0Buffer + 510);
+    if (footer == 0xAA55) return 1; 
+    return 0;
 }
 
 static void initializeArm7() {
     rtos_initIrq();
     rtos_startMainThread();
     ipc_initFifoSystem();
+
     rtos_createMutex(&gCardMutex);
 
     dmaFillWords(0, (void*)0x04000400, 0x100);
+
     pmic_setAmplifierEnable(true);
     sys_setSoundPower(true);
+
     readUserSettings();
     pmic_setPowerLedBlink(PMIC_CONTROL_POWER_LED_BLINK_NONE);
+
     sio_setGpioSiIrq(false);
     sio_setGpioMode(RCNT0_L_MODE_GPIO);
+
     rtc_init();
+
     sDldiIpcService.Start();
+
     snd_setMasterVolume(127);
     snd_setMasterEnable(true);
+
     initializeVBlankIrq();
 
     if (isDSiMode()) {
@@ -114,14 +136,18 @@ static void initializeArm7() {
     }
 
     ipc_setArm7SyncBits(7);
+
     while (ipc_getArm9SyncBits() != 6) {
         rtos_waitEvent(&sVBlankEvent, true, true);
     }
 
+    // DIESER AUFRUF RETTET DEN BOOTVORGANG AUF DER ECHTEN HARDWARE
+    sSdBlockCount = findSdCardBlockCount();
+
     tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
     tusb_init(0, &dev_init);
 
-    // Briefkasten beim Start leeren
+    // Briefkasten initialisieren
     volatile u32* shared_key = (volatile u32*)0x023FFFE0;
     *shared_key = 0xFFFFFFFF;
 
@@ -131,7 +157,9 @@ static void initializeArm7() {
 
 static void updateArm7IdleState() {
     checkMcuIrq();
-    if (sState == Arm7State::ExitRequested) snd_setMasterVolume(0);
+    if (sState == Arm7State::ExitRequested) {
+        snd_setMasterVolume(0);
+    }
 }
 
 static bool performExit(ExitMode exitMode) {
@@ -144,24 +172,32 @@ static bool performExit(ExitMode exitMode) {
             pmic_shutdown();
             break;
     }
-    while (true);
+    while (true); 
 }
 
-static void updateArm7ExitRequestedState() { performExit(sExitMode); }
+static void updateArm7ExitRequestedState() {
+    performExit(sExitMode);
+}
 
 static void updateArm7() {
     switch (sState) {
-        case Arm7State::Idle: updateArm7IdleState(); break;
-        case Arm7State::ExitRequested: updateArm7ExitRequestedState(); break;
+        case Arm7State::Idle:
+            updateArm7IdleState();
+            break;
+        case Arm7State::ExitRequested:
+            updateArm7ExitRequestedState();
+            break;
     }
 }
 
 int main() {
     sState = Arm7State::Idle;
     initializeArm7();
+
     while (true) {
         rtos_waitEvent(&sVBlankEvent, true, true);
         updateArm7();
     }
+
     return 0;
 }
