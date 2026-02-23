@@ -33,18 +33,18 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     if (c == 8 || c == 127) return HID_KEY_BACKSPACE;  // FIX: ASCII 127 (DEL) hinzugefügt
     if (c == '\t') return HID_KEY_TAB;                 // FIX: Tab-Taste hinzugefügt
     
-    // Erweiterte Sonderzeichen (optional, wenn Touchscreen-Tastatur sie unterstützt)
-    if (c == '.') return HID_KEY_DOT;
-    if (c == ',') return HID_KEY_COMMA;
-    if (c == '-') return HID_KEY_MINUS;
-    if (c == '=') return HID_KEY_EQUAL;
-    if (c == '[') return HID_KEY_LEFTBRACE;
-    if (c == ']') return HID_KEY_RIGHTBRACE;
-    if (c == ';') return HID_KEY_SEMICOLON;
-    if (c == '\'') return HID_KEY_APOSTROPHE;
-    if (c == '\\') return HID_KEY_BACKSLASH;
-    if (c == '/') return HID_KEY_SLASH;
-    if (c == '`') return HID_KEY_GRAVE;
+    // Erweiterte Sonderzeichen (Hardcoded USB HID Werte für 100% Compiler-Sicherheit)
+    if (c == '-') return 45; 
+    if (c == '=') return 46; 
+    if (c == '[') return 47; 
+    if (c == ']') return 48; 
+    if (c == '\\') return 49; 
+    if (c == ';') return 51; 
+    if (c == '\'') return 52; 
+    if (c == '`') return 53; 
+    if (c == ',') return 54; 
+    if (c == '.') return 55; 
+    if (c == '/') return 56; 
     
     // Sonderzeichen mit Shift
     if (c == '!') {
@@ -116,7 +116,7 @@ int main(void) {
     *shared_key = 0xFFFFFFFF;
     DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
     
-    // HUD anzeigen (FIX: Konsistentes Deutsch, vollständige Dokumentation)
+    // HUD anzeigen (Konsistentes Deutsch, vollständige Dokumentation)
     consoleClear();
     iprintf("\x1b[1;1H  PicoKeyboard v2.0.1");
     iprintf("\x1b[2;1H  Status: USB Aktiv");
