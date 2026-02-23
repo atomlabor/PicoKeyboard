@@ -12,20 +12,14 @@ static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
 
 static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     *modifier = 0;
-    
     if (c >= 'a' && c <= 'z') return HID_KEY_A + (c - 'a');
-    if (c >= 'A' && c <= 'Z') {
-        *modifier = KEYBOARD_MODIFIER_LEFTSHIFT;
-        return HID_KEY_A + (c - 'A');
-    }
+    if (c >= 'A' && c <= 'Z') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_A + (c - 'A'); }
     if (c >= '1' && c <= '9') return HID_KEY_1 + (c - '1');
     if (c == '0') return HID_KEY_0;
-    
-    if (c == ' ')  return HID_KEY_SPACE;
+    if (c == ' ') return HID_KEY_SPACE;
     if (c == '\n' || c == '\r') return HID_KEY_ENTER;
-    if (c == 8 || c == 127) return HID_KEY_BACKSPACE;  
-    if (c == '\t') return HID_KEY_TAB;                 
-    
+    if (c == 8 || c == 127) return HID_KEY_BACKSPACE;
+    if (c == '\t') return HID_KEY_TAB;
     if (c == '-') return 45; 
     if (c == '=') return 46; 
     if (c == '[') return 47; 
@@ -37,7 +31,6 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     if (c == ',') return 54; 
     if (c == '.') return 55; 
     if (c == '/') return 56; 
-    
     if (c == '!') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_1; }
     if (c == '@') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_2; }
     if (c == '#') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_3; }
@@ -48,22 +41,28 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     if (c == '*') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_8; }
     if (c == '(') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_9; }
     if (c == ')') { *modifier = KEYBOARD_MODIFIER_LEFTSHIFT; return HID_KEY_0; }
-    
     return 0;
 }
 
-int main(void) {
-    defaultExceptionHandler();
-    
-    // --- DSPICO HARDWARE SETUP ---
-    // 1. Übergabe von Slot-1 (Cartridge) an den ARM7 für den USB-Zugriff
+// Die Signatur exakt wie in der funktionierenden Massenspeicher-App
+int main(int argc, char* argv[]) {
+    // 1. HARDWARE-RESET (Behebt schwarze/weiße Bildschirme beim Start)
+    *(vu32*)0x04000000 = 0x10000;
+    *(vu16*)0x05000000 = 31 << 10;
+    *(vu16*)0x0400006C = 0;
+
+    // 2. Cartridge-Rechte an ARM7 (RP2040 Chip) abgeben
     mem_setDsCartridgeCpu(EXMEMCNT_SLOT1_CPU_ARM7);
 
-    // 2. Warten, bis der ARM7 bereit ist, dann bestätigen
+    // 3. LibNDS IRQs initialisieren (Zwingend, damit swiWaitForVBlank nicht einfriert!)
+    irqInit();
+    irqEnable(IRQ_VBLANK);
+
+    // 4. Hardware-Handschlag mit ARM7
     while (ipc_getArm7SyncBits() != 7);
     ipc_setArm9SyncBits(6);
-    // -----------------------------
 
+    // --- Ab hier läuft der normale Tastatur-Code ---
     powerOn(POWER_ALL_2D);
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
@@ -95,7 +94,7 @@ int main(void) {
     iprintf("\x1b[11;1H  ----------------------");
     iprintf("\x1b[12;1H  Touchscreen: Aktiv");
     iprintf("\x1b[13;1H  ----------------------");
-    iprintf("\x1b[15;1H  Verbindung: DSi USB");
+    iprintf("\x1b[15;1H  Verbindung: DSpico");
     
     bool touch_key_active = false;
     
