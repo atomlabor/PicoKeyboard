@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include "hid_keycodes.h"
 
-// Die identische, sichere Adresse für den Briefkasten
 #define SHARED_KEY_ADDR 0x02300000
 
 static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
@@ -25,7 +24,6 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
 }
 
 int main(void) {
-    // Fängt unvorhergesehene Abstürze ab und zeigt sie an, statt einfach einzufrieren
     defaultExceptionHandler();
     
     powerOn(POWER_ALL_2D);
