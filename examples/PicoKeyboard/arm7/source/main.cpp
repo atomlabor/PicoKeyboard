@@ -48,8 +48,13 @@ int main()
     // FIFO Handler für Keyboard vom ARM9
     fifoSetValue32Handler(FIFO_KEYBOARD, keyboard_fifo_handler, NULL);
 
-    // TinyUSB - NACH irqInit() initialisieren
-    tusb_init(); // tusb_init() ist der sicherste Standard-Aufruf für TinyUSB
+    // TinyUSB initialisieren: Dem System explizit sagen, dass es ein "Device" ist
+    tusb_rhport_init_t dev_init =
+    {
+        .role = TUSB_ROLE_DEVICE,
+        .speed = TUSB_SPEED_AUTO
+    };
+    tusb_init(0, &dev_init);
 
     // Die USB-Endlosschleife
     while (true)
