@@ -2,15 +2,14 @@
 #include <stdio.h>
 #include "hid_keycodes.h"
 
-#define FIFO_KEYBOARD FIFO_USER_01
+// Das ist unser gemeinsamer Briefkasten im RAM
+#define SHARED_KEY_ADDR 0x023FFFE0
 
-static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode)
-{
+static inline u32 make_hid_message(uint8_t modifier, uint8_t keycode) {
     return ((u32)modifier << 24) | ((u32)keycode << 16);
 }
 
-static uint8_t ascii_to_hid(int c, uint8_t *modifier)
-{
+static uint8_t ascii_to_hid(int c, uint8_t *modifier) {
     *modifier = 0;
     if (c >= 'a' && c <= 'z') return HID_KEY_A + (c - 'a');
     if (c >= 'A' && c <= 'Z') {
@@ -25,32 +24,26 @@ static uint8_t ascii_to_hid(int c, uint8_t *modifier)
     return 0;
 }
 
-int main(void)
-{
-    // Video-Setup: Strikt getrennt, damit es keine Grafik-Fehler gibt
+int main(void) {
+    powerOn(POWER_ALL_2D);
+
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
-
     vramSetBankA(VRAM_A_MAIN_BG);
     vramSetBankC(VRAM_C_SUB_BG);
 
-    // Oberes Display: Sauberer Textmodus (statt consoleDemoInit)
     PrintConsole topScreen;
     consoleInit(&topScreen, 0, BgType_Text4bpp, BgSize_T_256x256, 31, 0, true, true);
     consoleSelect(&topScreen);
 
-    // Unteres Display: Tastatur initialisieren
     keyboardInit(NULL, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
     keyboardShow();
 
-    // WICHTIG: Das DSpico ARM7-Betriebssystem wartet auf dieses "Go"-Signal!
-    // Ohne diese Zeile bleibt der ARM7 hängen und der USB-Port startet niemals.
-    REG_IPC_SYNC = (REG_IPC_SYNC & 0xF0FF) | (6 << 8);
+    // Briefkasten beim Start aktivieren
+    volatile u32* shared_key = (volatile u32*)SHARED_KEY_ADDR;
+    *shared_key = 0xFFFFFFFF;
+    DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
 
-    // FIFO initialisieren
-    fifoInit();
-
-    // Status auf dem oberen Display
     consoleClear();
     iprintf("\x1b[1;1H  PicoKeyboard v2.0.0");
     iprintf("\x1b[2;1H  Status: USB Active");
@@ -65,10 +58,8 @@ int main(void)
 
     bool touch_key_active = false;
 
-    while (1)
-    {
-        // VBlank gehört IMMER an den Anfang der Schleife für flüssiges Timing
-        swiWaitForVBlank(); 
+    while (1) {
+        swiWaitForVBlank();
         scanKeys();
         
         u32 keys_down = keysDown();
@@ -80,7 +71,6 @@ int main(void)
         bool send_key    = false;
         bool send_release = false;
 
-        // Touchscreen-Eingabe hat Priorität
         if (touch_char > 0) {
             keycode = ascii_to_hid(touch_char, &modifier);
             if (keycode > 0) {
@@ -88,7 +78,6 @@ int main(void)
                 touch_key_active = true;
             }
         }
-        // Hardware-Buttons
         else if (keys_down & KEY_A)      { keycode = HID_KEY_A;           send_key = true; }
         else if (keys_down & KEY_B)      { keycode = HID_KEY_B;           send_key = true; }
         else if (keys_down & KEY_START)  { keycode = HID_KEY_ENTER;       send_key = true; }
@@ -100,7 +89,6 @@ int main(void)
         else if (keys_down & KEY_L)      { keycode = HID_KEY_BACKSPACE;   send_key = true; }
         else if (keys_down & KEY_R)      { keycode = HID_KEY_ESCAPE;      send_key = true; }
 
-        // Taste loslassen
         if (keys_up & (KEY_A | KEY_B | KEY_START | KEY_SELECT |
                        KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT | KEY_L | KEY_R)) {
             send_release = true;
@@ -109,11 +97,14 @@ int main(void)
             touch_key_active = false;
         }
 
+        // Tasten in den Briefkasten werfen und den Cache leeren!
         if (send_key) {
-            fifoSendValue32(FIFO_KEYBOARD, make_hid_message(modifier, keycode));
+            *shared_key = make_hid_message(modifier, keycode);
+            DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
         }
         if (send_release) {
-            fifoSendValue32(FIFO_KEYBOARD, make_hid_message(0, 0));
+            *shared_key = make_hid_message(0, 0);
+            DC_FlushRange((void*)SHARED_KEY_ADDR, 4);
         }
     }
 
