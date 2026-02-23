@@ -53,7 +53,7 @@ static void checkMcuIrq(void) {
 
 static void usbThreadMain(void* arg) {
     (void)arg;
-    volatile u32* shared_key = (volatile u32*)0x02300000; 
+    volatile u32* shared_key = (volatile u32*)0x02300000;
     uint8_t sHidReport[8] = {0};
 
     while (true) {
@@ -61,13 +61,13 @@ static void usbThreadMain(void* arg) {
 
         u32 val = *shared_key;
         if (val != 0xFFFFFFFF) {
-            sHidReport[0] = (val >> 24) & 0xFF; 
-            sHidReport[2] = (val >> 16) & 0xFF; 
+            sHidReport[0] = (val >> 24) & 0xFF;
+            sHidReport[2] = (val >> 16) & 0xFF;
 
             if (tud_hid_ready()) {
                 tud_hid_report(0, sHidReport, sizeof(sHidReport));
             }
-            *shared_key = 0xFFFFFFFF; 
+            *shared_key = 0xFFFFFFFF;
         }
     }
 }
@@ -98,11 +98,11 @@ static void initializeArm7() {
         rtos_enableIrq2Mask(RTOS_IRQ2_MCU);
     }
 
-    // --- DSPICO HARDWARE HANDSHAKE ---
-    // Der ARM7 signalisiert Bereitschaft und wartet auf die Cartridge-Rechte vom ARM9
+    // --- LEBENSWICHTIGER SPINLOCK ---
+    // Der ARM7 signalisiert Bereitschaft und wartet aktiv ohne Schlafpause!
     ipc_setArm7SyncBits(7);
     while (ipc_getArm9SyncBits() != 6) {
-        rtos_waitEvent(&sVBlankEvent, true, true);
+        // Spinlock: Keine Pause! Blockiert nicht mehr am fehlenden Bildschirm-Signal.
     }
     // ---------------------------------
 
